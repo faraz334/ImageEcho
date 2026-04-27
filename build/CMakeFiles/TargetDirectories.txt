@@ -1,0 +1,3 @@
+C:/Users/Faraz-Pc/ImageEcho/build/CMakeFiles/ImageEcho.dir
+C:/Users/Faraz-Pc/ImageEcho/build/CMakeFiles/edit_cache.dir
+C:/Users/Faraz-Pc/ImageEcho/build/CMakeFiles/rebuild_cache.dir
