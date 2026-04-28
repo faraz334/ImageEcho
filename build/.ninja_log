@@ -1,3 +1,7 @@
 # ninja log v7
 33	1171	7990220651734072	CMakeFiles/ImageEcho.dir/src/main.cpp.obj	62e6e0c4553e5e47
 1176	1312	7990220663158669	ImageEcho.exe	b34871126aa25127
+103	1184	7990978385828508	build.ninja	dba91f89947bf0e9
+103	1184	7990978385828508	C:/Users/Faraz-Pc/ImageEcho/build/cmake_install.cmake	dba91f89947bf0e9
+7	2015	7990981949598935	CMakeFiles/ImageEcho.dir/src/main.cpp.obj	203a6b58a01fdae2
+2015	2466	7990981969670378	ImageEcho.exe	b34871126aa25127
