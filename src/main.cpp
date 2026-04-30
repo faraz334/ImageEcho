@@ -1,105 +1,158 @@
 // ============================================================
-// main.cpp  —  Day 2
+// main.cpp  —  Day 3
 // ============================================================
-// Today we test the Strategy Pattern:
-//   1. Create an EchoContext with an LsbEngine
-//   2. Load a real image
-//   3. Run the engine — it perturbs the image
-//   4. Save the result
-//   5. Visually confirm the images look identical
+// Today we:
+//   1. Test the DCT engine on a small block (verify math)
+//   2. Run DCT on a real image
+//   3. Compare LSB vs DCT side by side
+//   4. Demonstrate strategy hot-swap (change engine at runtime)
 // ============================================================
 
 #include "ImageBuffer.hpp"
 #include "ImageIO.hpp"
 #include "EchoContext.hpp"
 #include "engines/LsbEngine.hpp"
+#include "engines/DctEngine.hpp"
 
 #include <iostream>
 #include <memory>   // std::make_unique
+#include <cmath>    // std::abs
 
 // ── Helper: print test result ────────────────────────────────
 void check(const std::string& label, bool passed) {
     std::cout << (passed ? "  [PASS]  " : "  [FAIL]  ") << label << "\n";
 }
 
-// ── Test 1: Strategy Pattern basics ─────────────────────────
-void test_strategyPattern() {
-    std::cout << "\n--- Test: Strategy Pattern ---\n";
+// ── Test 1: DCT round-trip (forward then inverse = same image)
+// This verifies our DCT math is correct.
+// If we do forward DCT then inverse DCT WITHOUT injecting noise,
+// we should get back exactly the same pixel values.
+void test_dctRoundTrip() {
+    std::cout << "\n--- Test: DCT round-trip accuracy ---\n";
+    std::cout << "  (If forward+inverse DCT gives back the same image,\n";
+    std::cout << "   our math is correct)\n";
 
-    // Create a context and plug in the LSB engine
-    // make_unique<LsbEngine>() creates a new LsbEngine on the heap
-    // and wraps it in a unique_ptr (smart pointer)
-    EchoContext ctx(std::make_unique<LsbEngine>());
+    // Create a small image with known values
+    ImageBuffer original(16, 16, 1);  // 16x16, grayscale
 
-    check("active engine is LSB", ctx.activeEngineName() == "LSB Engine");
-    std::cout << "  Active engine: " << ctx.activeEngineName() << "\n";
-}
+    // Fill with a gradient pattern (varied values to stress-test DCT)
+    for (int y = 0; y < 16; ++y)
+        for (int x = 0; x < 16; ++x)
+            original.at(x, y, 0) = static_cast<uint8_t>((x * 16 + y * 8) % 256);
 
-// ── Test 2: LSB actually changes pixels ──────────────────────
-void test_lsbChangesPixels() {
-    std::cout << "\n--- Test: LSB changes pixels ---\n";
-
-    // Create a small test image
-    ImageBuffer original(10, 10, 3);
-
-    // Fill with a known value so we can predict the result
-    // Let's set all pixels to 200 (binary: 11001000)
-    for (int y = 0; y < 10; ++y)
-        for (int x = 0; x < 10; ++x)
-            for (int c = 0; c < 3; ++c)
-                original.at(x, y, c) = 200;
-
-    // Clone original into target (engine writes into target)
     ImageBuffer target = original.clone();
 
-    // Run the LSB engine
-    EchoContext ctx(std::make_unique<LsbEngine>());
-    PerturbationReport report = ctx.run(original, target, 8.0f / 255.0f);
+    // Run DCT with epsilon = 0 (no perturbation — pure round-trip test)
+    EchoContext ctx(std::make_unique<DctEngine>());
+    ctx.run(original, target, 0.0f);
 
-    // 200 XOR 3 = 203 (flipping bottom 2 bits)
-    // binary: 11001000 XOR 00000011 = 11001011 = 203
-    check("pixel value changed",   target.at(0, 0, 0) != original.at(0, 0, 0));
-    check("change is tiny (<=3)",  report.maxDelta <= 3.0f);
-    check("all pixels altered",    report.pixelsAltered == 10 * 10 * 3);
-    check("original unchanged",    original.at(0, 0, 0) == 200);
+    // Check that pixels came back close to original (within 2 units)
+    // Small rounding error is normal with floating point math
+    int badPixels = 0;
+    for (int y = 0; y < 16; ++y) {
+        for (int x = 0; x < 16; ++x) {
+            int diff = std::abs(
+                static_cast<int>(original.at(x, y, 0)) -
+                static_cast<int>(target.at(x, y, 0))
+            );
+            if (diff > 2) badPixels++;
+        }
+    }
 
-    std::cout << "  Original pixel value: " << (int)original.at(0, 0, 0) << "\n";
-    std::cout << "  Perturbed pixel value: " << (int)target.at(0, 0, 0) << "\n";
-    std::cout << "  Max delta: " << report.maxDelta << " (invisible if <=3)\n";
+    check("round-trip error is near zero", badPixels == 0);
+    std::cout << "  Pixels with error > 2: " << badPixels << " / 256\n";
 }
 
-// ── Test 3: Run on a real image ──────────────────────────────
-void test_realImage() {
-    std::cout << "\n--- Test: Real image perturbation ---\n";
+// ── Test 2: DCT actually changes pixels ──────────────────────
+void test_dctChangesPixels() {
+    std::cout << "\n--- Test: DCT changes pixels ---\n";
 
-    const std::string inputPath  = "assets/test.png";
-    const std::string outputPath = "assets/test_lsb.png";
+    ImageBuffer original(16, 16, 3);
+
+    // Fill with value 128 (mid-grey)
+    for (int y = 0; y < 16; ++y)
+        for (int x = 0; x < 16; ++x)
+            for (int c = 0; c < 3; ++c)
+                original.at(x, y, c) = 128;
+
+    ImageBuffer target = original.clone();
+
+    EchoContext ctx(std::make_unique<DctEngine>());
+    PerturbationReport report = ctx.run(original, target, 8.0f / 255.0f);
+
+    check("pixels were changed",      report.pixelsAltered > 0);
+    check("original still 128",       original.at(0, 0, 0) == 128);
+    check("mean delta is small (<5)", report.meanDelta < 5.0f);
+
+    std::cout << "  Pixels altered: " << report.pixelsAltered << "\n";
+    std::cout << "  Mean delta:     " << report.meanDelta << "\n";
+    std::cout << "  Max delta:      " << report.maxDelta  << "\n";
+}
+
+// ── Test 3: Run DCT on a real image ──────────────────────────
+void test_dctRealImage() {
+    std::cout << "\n--- Test: DCT on real image ---\n";
 
     try {
-        // Load original
-        ImageBuffer original = ImageIO::load(inputPath);
-        std::cout << "  Loaded: " << original.dims().width
-                  << " x " << original.dims().height << " px\n";
+        ImageBuffer original = ImageIO::load("assets/test.png");
+        ImageBuffer target   = original.clone();
 
-        // Clone into target
-        ImageBuffer target = original.clone();
-
-        // Run LSB engine
-        EchoContext ctx(std::make_unique<LsbEngine>());
+        EchoContext ctx(std::make_unique<DctEngine>());
         PerturbationReport report = ctx.run(original, target, 8.0f / 255.0f);
 
-        // Save perturbed image
-        ImageIO::save(target, outputPath);
+        ImageIO::save(target, "assets/test_dct.png");
 
-        check("output saved successfully", true);
-        check("max delta is invisible (<=3)", report.maxDelta <= 3.0f);
+        check("output saved",              true);
+        check("mean delta < 5 (invisible)", report.meanDelta < 5.0f);
 
         std::cout << "\n";
         report.printToConsole();
 
-        std::cout << "\n  Compare these two files visually — they should look IDENTICAL:\n";
-        std::cout << "    Original:  " << inputPath  << "\n";
-        std::cout << "    Perturbed: " << outputPath << "\n";
+    } catch (const std::exception& e) {
+        std::cerr << "  ERROR: " << e.what() << "\n";
+    }
+}
+
+// ── Test 4: Compare LSB vs DCT side by side ──────────────────
+void test_compareEngines() {
+    std::cout << "\n--- Test: LSB vs DCT comparison ---\n";
+
+    try {
+        ImageBuffer original = ImageIO::load("assets/test.png");
+
+        // ── Run LSB ──────────────────────────────────────────
+        ImageBuffer lsbTarget = original.clone();
+        EchoContext lsbCtx(std::make_unique<LsbEngine>());
+        PerturbationReport lsbReport = lsbCtx.run(original, lsbTarget, 8.0f / 255.0f);
+
+        // ── Run DCT ──────────────────────────────────────────
+        ImageBuffer dctTarget = original.clone();
+        EchoContext dctCtx(std::make_unique<DctEngine>());
+        PerturbationReport dctReport = dctCtx.run(original, dctTarget, 8.0f / 255.0f);
+
+        // ── Print comparison table ────────────────────────────
+        std::cout << "\n";
+        std::cout << "  Metric            LSB Engine    DCT Engine\n";
+        std::cout << "  ─────────────────────────────────────────\n";
+        printf("  Mean delta        %-14.4f%-14.4f\n",
+            lsbReport.meanDelta, dctReport.meanDelta);
+        printf("  Max delta         %-14.4f%-14.4f\n",
+            lsbReport.maxDelta, dctReport.maxDelta);
+        printf("  Pixels altered    %-14d%-14d\n",
+            lsbReport.pixelsAltered, dctReport.pixelsAltered);
+        std::cout << "  ─────────────────────────────────────────\n";
+        std::cout << "  Lower mean delta = more invisible to humans\n";
+        std::cout << "  DCT targets frequency domain = stronger ML confusion\n";
+
+        // ── Demonstrate hot-swap ─────────────────────────────
+        std::cout << "\n--- Demo: Strategy hot-swap ---\n";
+        EchoContext ctx(std::make_unique<LsbEngine>());
+        std::cout << "  Current engine: " << ctx.activeEngineName() << "\n";
+
+        ctx.setEngine(std::make_unique<DctEngine>());  // swap at runtime!
+        std::cout << "  After swap:     " << ctx.activeEngineName() << "\n";
+
+        check("hot-swap works", ctx.activeEngineName() == "DCT Engine");
 
     } catch (const std::exception& e) {
         std::cerr << "  ERROR: " << e.what() << "\n";
@@ -109,15 +162,16 @@ void test_realImage() {
 // ── main ─────────────────────────────────────────────────────
 int main() {
     std::cout << "========================================\n";
-    std::cout << "  ImageEcho — Day 2: Strategy Pattern\n";
+    std::cout << "  ImageEcho - Day 3: DCT Engine\n";
     std::cout << "========================================\n";
 
-    test_strategyPattern();
-    test_lsbChangesPixels();
-    test_realImage();
+    test_dctRoundTrip();
+    test_dctChangesPixels();
+    test_dctRealImage();
+    test_compareEngines();
 
     std::cout << "\n========================================\n";
-    std::cout << "  Day 2 complete!\n";
+    std::cout << "  Day 3 complete!\n";
     std::cout << "========================================\n";
 
     return 0;
