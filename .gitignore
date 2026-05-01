@@ -1,0 +1,26 @@
+# ── Build output ─────────────────────────────────────────────
+build/
+*.exe
+*.o
+*.obj
+
+# ── CMake generated files ─────────────────────────────────────
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+
+# ── VS Code settings (optional — remove this if you want
+#    to share your VS Code config with collaborators) ──────────
+.vscode/
+
+# ── Test output images ────────────────────────────────────────
+# Keep the original test.png but ignore generated outputs
+assets/out_*.png
+assets/test_lsb.png
+assets/test_dct.png
+assets/test_dct_optimal.png
+
+# ── OS junk ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
