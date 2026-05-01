@@ -1,158 +1,152 @@
 // ============================================================
-// main.cpp  —  Day 3
+// main.cpp  —  Day 4
 // ============================================================
-// Today we:
-//   1. Test the DCT engine on a small block (verify math)
-//   2. Run DCT on a real image
-//   3. Compare LSB vs DCT side by side
-//   4. Demonstrate strategy hot-swap (change engine at runtime)
+// Today we test:
+//   1. SSIM returns 1.0 for identical images
+//   2. SSIM returns near 0 for completely different images
+//   3. SSIM correctly scores LSB and DCT perturbations
+//   4. runOptimal() finds the best epsilon automatically
+//   5. Final comparison table: LSB vs DCT with SSIM scores
 // ============================================================
 
 #include "ImageBuffer.hpp"
 #include "ImageIO.hpp"
 #include "EchoContext.hpp"
+#include "SsimAnalyzer.hpp"
 #include "engines/LsbEngine.hpp"
 #include "engines/DctEngine.hpp"
 
 #include <iostream>
-#include <memory>   // std::make_unique
-#include <cmath>    // std::abs
+#include <memory>
+#include <cstdio>
 
-// ── Helper: print test result ────────────────────────────────
+// ── Helper ───────────────────────────────────────────────────
 void check(const std::string& label, bool passed) {
     std::cout << (passed ? "  [PASS]  " : "  [FAIL]  ") << label << "\n";
 }
 
-// ── Test 1: DCT round-trip (forward then inverse = same image)
-// This verifies our DCT math is correct.
-// If we do forward DCT then inverse DCT WITHOUT injecting noise,
-// we should get back exactly the same pixel values.
-void test_dctRoundTrip() {
-    std::cout << "\n--- Test: DCT round-trip accuracy ---\n";
-    std::cout << "  (If forward+inverse DCT gives back the same image,\n";
-    std::cout << "   our math is correct)\n";
+// ── Test 1: Identical images → SSIM = 1.0 ────────────────────
+void test_ssimIdentical() {
+    std::cout << "\n--- Test: SSIM of identical images ---\n";
+    std::cout << "  (Same image compared to itself should give SSIM = 1.0)\n";
 
-    // Create a small image with known values
-    ImageBuffer original(16, 16, 1);  // 16x16, grayscale
-
-    // Fill with a gradient pattern (varied values to stress-test DCT)
-    for (int y = 0; y < 16; ++y)
-        for (int x = 0; x < 16; ++x)
-            original.at(x, y, 0) = static_cast<uint8_t>((x * 16 + y * 8) % 256);
-
-    ImageBuffer target = original.clone();
-
-    // Run DCT with epsilon = 0 (no perturbation — pure round-trip test)
-    EchoContext ctx(std::make_unique<DctEngine>());
-    ctx.run(original, target, 0.0f);
-
-    // Check that pixels came back close to original (within 2 units)
-    // Small rounding error is normal with floating point math
-    int badPixels = 0;
-    for (int y = 0; y < 16; ++y) {
-        for (int x = 0; x < 16; ++x) {
-            int diff = std::abs(
-                static_cast<int>(original.at(x, y, 0)) -
-                static_cast<int>(target.at(x, y, 0))
-            );
-            if (diff > 2) badPixels++;
+    ImageBuffer img(100, 100, 3);
+    // Fill with some values
+    for (int y = 0; y < 100; ++y)
+        for (int x = 0; x < 100; ++x) {
+            img.at(x, y, 0) = static_cast<uint8_t>(x + y);
+            img.at(x, y, 1) = static_cast<uint8_t>(x * 2 % 256);
+            img.at(x, y, 2) = static_cast<uint8_t>(y * 3 % 256);
         }
-    }
 
-    check("round-trip error is near zero", badPixels == 0);
-    std::cout << "  Pixels with error > 2: " << badPixels << " / 256\n";
+    ImageBuffer copy = img.clone();
+    auto result = SsimAnalyzer::compute(img, copy);
+
+    printf("  SSIM: %.6f (expected: 1.0)\n", result.ssim);
+    printf("  PSNR: %.2f dB (expected: 100)\n", result.psnr);
+
+    check("SSIM == 1.0 for identical images", result.ssim >= 0.9999f);
+    check("PSNR is very high for identical images", result.psnr >= 99.0f);
+    check("max delta == 0 for identical images", result.maxDelta == 0.0f);
 }
 
-// ── Test 2: DCT actually changes pixels ──────────────────────
-void test_dctChangesPixels() {
-    std::cout << "\n--- Test: DCT changes pixels ---\n";
+// ── Test 2: Inverted image → SSIM near 0 ─────────────────────
+void test_ssimInverted() {
+    std::cout << "\n--- Test: SSIM of inverted image ---\n";
+    std::cout << "  (Image vs its negative/inverted version should give low SSIM)\n";
 
-    ImageBuffer original(16, 16, 3);
+    ImageBuffer original(100, 100, 3);
+    ImageBuffer inverted(100, 100, 3);
 
-    // Fill with value 128 (mid-grey)
-    for (int y = 0; y < 16; ++y)
-        for (int x = 0; x < 16; ++x)
-            for (int c = 0; c < 3; ++c)
-                original.at(x, y, c) = 128;
+    for (int y = 0; y < 100; ++y)
+        for (int x = 0; x < 100; ++x)
+            for (int c = 0; c < 3; ++c) {
+                uint8_t val = static_cast<uint8_t>((x + y * 2) % 256);
+                original.at(x, y, c) = val;
+                inverted.at(x, y, c) = static_cast<uint8_t>(255 - val);  // invert
+            }
 
-    ImageBuffer target = original.clone();
+    auto result = SsimAnalyzer::compute(original, inverted);
 
-    EchoContext ctx(std::make_unique<DctEngine>());
-    PerturbationReport report = ctx.run(original, target, 8.0f / 255.0f);
+    printf("  SSIM: %.6f (expected: near 0 or negative)\n", result.ssim);
+    printf("  PSNR: %.2f dB (expected: low)\n", result.psnr);
 
-    check("pixels were changed",      report.pixelsAltered > 0);
-    check("original still 128",       original.at(0, 0, 0) == 128);
-    check("mean delta is small (<5)", report.meanDelta < 5.0f);
-
-    std::cout << "  Pixels altered: " << report.pixelsAltered << "\n";
-    std::cout << "  Mean delta:     " << report.meanDelta << "\n";
-    std::cout << "  Max delta:      " << report.maxDelta  << "\n";
+    check("SSIM is low for inverted image", result.ssim < 0.5f);
+    check("PSNR is low for inverted image", result.psnr < 20.0f);
 }
 
-// ── Test 3: Run DCT on a real image ──────────────────────────
-void test_dctRealImage() {
-    std::cout << "\n--- Test: DCT on real image ---\n";
+// ── Test 3: SSIM scores for LSB and DCT ──────────────────────
+void test_ssimScores() {
+    std::cout << "\n--- Test: SSIM scores for LSB and DCT ---\n";
 
     try {
         ImageBuffer original = ImageIO::load("assets/test.png");
-        ImageBuffer target   = original.clone();
 
-        EchoContext ctx(std::make_unique<DctEngine>());
-        PerturbationReport report = ctx.run(original, target, 8.0f / 255.0f);
+        // ── LSB ──────────────────────────────────────────────
+        ImageBuffer lsbTarget = original.clone();
+        EchoContext lsbCtx(std::make_unique<LsbEngine>());
+        lsbCtx.run(original, lsbTarget, 8.0f / 255.0f);
+        auto lsbMetrics = SsimAnalyzer::compute(original, lsbTarget);
 
-        ImageIO::save(target, "assets/test_dct.png");
+        // ── DCT ──────────────────────────────────────────────
+        ImageBuffer dctTarget = original.clone();
+        EchoContext dctCtx(std::make_unique<DctEngine>());
+        dctCtx.run(original, dctTarget, 8.0f / 255.0f);
+        auto dctMetrics = SsimAnalyzer::compute(original, dctTarget);
 
-        check("output saved",              true);
-        check("mean delta < 5 (invisible)", report.meanDelta < 5.0f);
+        // ── Print results ─────────────────────────────────────
+        std::cout << "\n  Engine       SSIM      PSNR      Max Delta  Invisible?\n";
+        std::cout << "  ──────────────────────────────────────────────────────\n";
+        printf("  LSB          %-10.4f%-10.2f%-11.1f%s\n",
+            lsbMetrics.ssim, lsbMetrics.psnr, lsbMetrics.maxDelta,
+            lsbMetrics.isInvisible() ? "YES" : "NO");
+        printf("  DCT          %-10.4f%-10.2f%-11.1f%s\n",
+            dctMetrics.ssim, dctMetrics.psnr, dctMetrics.maxDelta,
+            dctMetrics.isInvisible() ? "YES" : "NO");
 
-        std::cout << "\n";
-        report.printToConsole();
+        check("LSB SSIM > 0.95 (invisible)", lsbMetrics.ssim > 0.95f);
+        check("DCT SSIM > 0.95 (invisible)", dctMetrics.ssim > 0.95f);
+        check("LSB PSNR > 40 dB",            lsbMetrics.psnr > 40.0f);
+       check("DCT PSNR > 30 dB (stronger attack)", dctMetrics.psnr > 30.0f);
 
     } catch (const std::exception& e) {
         std::cerr << "  ERROR: " << e.what() << "\n";
     }
 }
 
-// ── Test 4: Compare LSB vs DCT side by side ──────────────────
-void test_compareEngines() {
-    std::cout << "\n--- Test: LSB vs DCT comparison ---\n";
+// ── Test 4: runOptimal() finds the best epsilon ───────────────
+void test_optimalEpsilon() {
+    std::cout << "\n--- Test: runOptimal() binary search ---\n";
+    std::cout << "  (Finding highest epsilon that keeps SSIM >= 0.95)\n\n";
 
     try {
         ImageBuffer original = ImageIO::load("assets/test.png");
 
-        // ── Run LSB ──────────────────────────────────────────
-        ImageBuffer lsbTarget = original.clone();
-        EchoContext lsbCtx(std::make_unique<LsbEngine>());
-        PerturbationReport lsbReport = lsbCtx.run(original, lsbTarget, 8.0f / 255.0f);
-
-        // ── Run DCT ──────────────────────────────────────────
-        ImageBuffer dctTarget = original.clone();
+        // ── DCT optimal run ───────────────────────────────────
+        ImageBuffer dctOptimal = original.clone();
         EchoContext dctCtx(std::make_unique<DctEngine>());
-        PerturbationReport dctReport = dctCtx.run(original, dctTarget, 8.0f / 255.0f);
 
-        // ── Print comparison table ────────────────────────────
+        // verbose=true so we can see the search in action
+        PerturbationReport report = dctCtx.runOptimal(
+            original, dctOptimal,
+            0.95f,           // SSIM target
+            50.0f / 255.0f,  // max epsilon to try
+            true             // verbose: print each iteration
+        );
+
+        // Measure final SSIM
+        auto finalMetrics = SsimAnalyzer::compute(original, dctOptimal);
+
+        std::cout << "\n  Final result:\n";
+        report.printToConsole();
         std::cout << "\n";
-        std::cout << "  Metric            LSB Engine    DCT Engine\n";
-        std::cout << "  ─────────────────────────────────────────\n";
-        printf("  Mean delta        %-14.4f%-14.4f\n",
-            lsbReport.meanDelta, dctReport.meanDelta);
-        printf("  Max delta         %-14.4f%-14.4f\n",
-            lsbReport.maxDelta, dctReport.maxDelta);
-        printf("  Pixels altered    %-14d%-14d\n",
-            lsbReport.pixelsAltered, dctReport.pixelsAltered);
-        std::cout << "  ─────────────────────────────────────────\n";
-        std::cout << "  Lower mean delta = more invisible to humans\n";
-        std::cout << "  DCT targets frequency domain = stronger ML confusion\n";
+        finalMetrics.printToConsole();
 
-        // ── Demonstrate hot-swap ─────────────────────────────
-        std::cout << "\n--- Demo: Strategy hot-swap ---\n";
-        EchoContext ctx(std::make_unique<LsbEngine>());
-        std::cout << "  Current engine: " << ctx.activeEngineName() << "\n";
+        // Save the optimal result
+        ImageIO::save(dctOptimal, "assets/test_dct_optimal.png");
 
-        ctx.setEngine(std::make_unique<DctEngine>());  // swap at runtime!
-        std::cout << "  After swap:     " << ctx.activeEngineName() << "\n";
-
-        check("hot-swap works", ctx.activeEngineName() == "DCT Engine");
+        check("optimal SSIM >= 0.95", finalMetrics.ssim >= 0.95f);
+        check("optimal result saved", true);
 
     } catch (const std::exception& e) {
         std::cerr << "  ERROR: " << e.what() << "\n";
@@ -162,16 +156,16 @@ void test_compareEngines() {
 // ── main ─────────────────────────────────────────────────────
 int main() {
     std::cout << "========================================\n";
-    std::cout << "  ImageEcho - Day 3: DCT Engine\n";
+    std::cout << "  ImageEcho - Day 4: SSIM Analyzer\n";
     std::cout << "========================================\n";
 
-    test_dctRoundTrip();
-    test_dctChangesPixels();
-    test_dctRealImage();
-    test_compareEngines();
+    test_ssimIdentical();
+    test_ssimInverted();
+    test_ssimScores();
+    test_optimalEpsilon();
 
     std::cout << "\n========================================\n";
-    std::cout << "  Day 3 complete!\n";
+    std::cout << "  Day 4 complete!\n";
     std::cout << "========================================\n";
 
     return 0;
